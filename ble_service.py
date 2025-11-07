@@ -65,6 +65,9 @@ class BLEService:
                 logger.info(f"  Sender ID: {recv_sender_id.hex()}")
                 logger.info(f"  Recipient ID: {recv_recipient_id.hex() if recv_recipient_id else 'None'}")
                 logger.info(f"  Has signature: {recv_signature is not None}")
+                if recv_signature:
+                    logger.info(f"  Signature (first 16 bytes): {recv_signature[:16].hex()}")
+                    logger.info(f"  Signature (all zeros?): {all(b == 0 for b in recv_signature)}")
                 logger.info(f"  Full packet size: {len(data)} bytes")
                 logger.info(f"  First 32 bytes (hex): {bytes(data[:32]).hex()}")
                 logger.info(f"  First 32 bytes (repr): {repr(bytes(data[:32]))}")
@@ -475,11 +478,21 @@ class BLEService:
         logger.info(f"  Sender ID: {our_sender_id.hex()}")
         logger.info(f"  Recipient ID: {our_recipient_id.hex() if our_recipient_id else 'None'}")
         logger.info(f"  Has signature: {our_signature is not None}")
+        if our_signature:
+            logger.info(f"  Signature (first 16 bytes): {our_signature[:16].hex()}")
+            logger.info(f"  Signature (all zeros?): {all(b == 0 for b in our_signature)}")
         logger.info(f"  Full packet size: {len(data_to_send)} bytes")
         logger.info(f"  First 32 bytes (hex): {data_to_send[:32].hex()}")
         logger.info(f"  First 32 bytes (repr): {repr(data_to_send[:32])}")
         logger.info(f"  Payload content: {our_payload}")
         logger.info(f"=== END OUR PACKET ===")
+        
+        # Compare with received packet structure
+        logger.info(f"=== COMPARISON ===")
+        logger.info(f"  Our flags: {our_flags}, Phone expects: 3 (HAS_RECIPIENT | HAS_SIGNATURE)")
+        logger.info(f"  Our type: {our_type}, Phone sends: 2 (KEY_EXCHANGE)")
+        logger.info(f"  Our packet size: {len(data_to_send)} bytes")
+        logger.info(f"=== END COMPARISON ===")
 
         connected_clients = [client for client in self.clients.values() if client.is_connected]
         

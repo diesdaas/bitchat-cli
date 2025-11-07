@@ -362,6 +362,9 @@ class BLEService:
                         await client.start_notify(target_characteristic.uuid, self.notification_handler)
                         logger.info(f"Started notifications for {device.address} on characteristic {target_characteristic.uuid}")
                         
+                        # Send ANNOUNCE packet with our public keys so peer can validate our signatures
+                        await self.send_announce_packet(client, target_characteristic)
+                        
                         self.cli_redraw()
                         return  # Success, exit the retry loop and function
                     else:
@@ -420,6 +423,65 @@ class BLEService:
         if address in self.clients:
             del self.clients[address]
         self.connecting_peers.discard(address)
+
+    async def send_announce_packet(self, client: BleakClient, characteristic):
+        """Sends an ANNOUNCE packet with our public keys to allow signature validation."""
+        from protocol import MessageType
+        
+        # Build ANNOUNCE payload: nickname + Ed25519 public key + X25519 public key
+        # Format: [type][length][data]...
+        # Type 1: Nickname (8 bytes)
+        nickname_bytes = self.state.nickname.encode('utf-8')[:8].ljust(8, b'\x00')
+        announce_payload = b'\x01\x08' + nickname_bytes
+        
+        # Type 2: Ed25519 public signing key (32 bytes)
+        ed25519_pubkey = self.encryption_service.get_signing_public_key_bytes()
+        announce_payload += b'\x02\x20' + ed25519_pubkey  # 0x20 = 32
+        
+        # Type 3: X25519 public key (32 bytes) for encryption
+        x25519_pubkey = self.encryption_service.get_public_key_bytes()
+        announce_payload += b'\x03\x20' + x25519_pubkey  # 0x20 = 32
+        
+        # Create ANNOUNCE packet
+        packet = BitchatPacket(
+            sender_id=self.state.my_peer_id,
+            recipient_id=None,  # ANNOUNCE packets don't have recipient
+            payload=announce_payload,
+            type=MessageType.ANNOUNCE,  # Type 0x01
+            signature=None  # Will add signature after signing
+        )
+        
+        # Sign the packet (header + sender_id + payload, without signature)
+        # ANNOUNCE packets have HAS_SIGNATURE flag but no HAS_RECIPIENT
+        header_format = f'>BB B Q B H {8}s'
+        flags = 2  # HAS_SIGNATURE (no recipient for ANNOUNCE)
+        header = struct.pack(
+            header_format, packet.version, packet.type.value, packet.ttl,
+            packet.timestamp, flags, len(packet.payload), packet.sender_id
+        )
+        data_to_sign = header + packet.payload
+        
+        # Sign and add signature
+        signature = self.encryption_service.sign(data_to_sign)
+        packet.signature = signature
+        
+        # Pack and pad to 256 bytes
+        data_to_send = packet.pack()
+        if len(data_to_send) < 256:
+            data_to_send = data_to_send + b'\x00' * (256 - len(data_to_send))
+        
+        # Send ANNOUNCE packet
+        try:
+            await client.write_gatt_char(characteristic.uuid, data_to_send, response=True)
+            logger.info(f"Sent ANNOUNCE packet to {client.address} with public keys")
+        except Exception as e:
+            logger.warning(f"Failed to send ANNOUNCE packet to {client.address}: {e}")
+            # Try without response
+            try:
+                await client.write_gatt_char(characteristic.uuid, data_to_send, response=False)
+                logger.info(f"Sent ANNOUNCE packet (no response) to {client.address}")
+            except Exception as e2:
+                logger.error(f"Failed to send ANNOUNCE packet even without response: {e2}")
 
     async def broadcast(self, message: BitchatMessage):
         """Sends a message to all connected and validated peers."""

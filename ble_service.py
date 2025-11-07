@@ -38,10 +38,38 @@ class BLEService:
         """Handles incoming data packets from peers when acting as Central."""
         try:
             logger.info(f"Notification received: {len(data)} bytes from characteristic {characteristic.uuid}")
-            # Log first 64 bytes in hex for debugging
-            hex_preview = data.hex()[:128]  # First 64 bytes as hex string
-            logger.info(f"First 64 bytes (hex): {hex_preview}...")
-            logger.info(f"First 32 bytes (repr): {repr(bytes(data[:32]))}")
+            
+            # Parse the received packet structure for comparison
+            header_base_format = '>BB B Q B H'
+            header_base_size = struct.calcsize(header_base_format)
+            if len(data) >= header_base_size + 8:
+                recv_version, recv_type, recv_ttl, recv_timestamp, recv_flags, recv_payload_len = struct.unpack(
+                    header_base_format, bytes(data[:header_base_size])
+                )
+                recv_sender_id = bytes(data[header_base_size:header_base_size + 8])
+                offset = header_base_size + 8
+                recv_recipient_id = None
+                if recv_flags & 1:  # HAS_RECIPIENT
+                    recv_recipient_id = bytes(data[offset:offset + 8])
+                    offset += 8
+                recv_payload = bytes(data[offset:offset + recv_payload_len]) if len(data) >= offset + recv_payload_len else b''
+                offset += recv_payload_len
+                recv_signature = None
+                if recv_flags & 2:  # HAS_SIGNATURE
+                    recv_signature = bytes(data[offset:offset + 64]) if len(data) >= offset + 64 else None
+                
+                logger.info(f"=== RECEIVED PACKET STRUCTURE ===")
+                logger.info(f"  Version: {recv_version}, Type: {recv_type}, TTL: {recv_ttl}")
+                logger.info(f"  Flags: {recv_flags} (HAS_RECIPIENT={bool(recv_flags & 1)}, HAS_SIGNATURE={bool(recv_flags & 2)})")
+                logger.info(f"  Payload length: {recv_payload_len}, Actual payload: {len(recv_payload)}")
+                logger.info(f"  Sender ID: {recv_sender_id.hex()}")
+                logger.info(f"  Recipient ID: {recv_recipient_id.hex() if recv_recipient_id else 'None'}")
+                logger.info(f"  Has signature: {recv_signature is not None}")
+                logger.info(f"  Full packet size: {len(data)} bytes")
+                logger.info(f"  First 32 bytes (hex): {bytes(data[:32]).hex()}")
+                logger.info(f"  First 32 bytes (repr): {repr(bytes(data[:32]))}")
+                logger.info(f"  Payload content: {recv_payload}")
+                logger.info(f"=== END RECEIVED PACKET ===")
             
             packet = BitchatPacket.unpack(bytes(data))
             if packet:
@@ -411,7 +439,7 @@ class BLEService:
         )
         data_to_send = packet.pack()
         
-        # Debug: Log the exact packet structure
+        # Debug: Log the exact packet structure for comparison with received packets
         # Calculate flags manually for logging (HAS_RECIPIENT=1, HAS_SIGNATURE=2)
         calculated_flags = 0
         if packet.recipient_id is not None:
@@ -419,11 +447,38 @@ class BLEService:
         if packet.signature is not None:
             calculated_flags |= 2  # HAS_SIGNATURE
         
+        # Parse our own packet to verify structure
+        header_base_format = '>BB B Q B H'
+        header_base_size = struct.calcsize(header_base_format)
+        if len(data_to_send) >= header_base_size + 8:
+            our_version, our_type, our_ttl, our_timestamp, our_flags, our_payload_len = struct.unpack(
+                header_base_format, data_to_send[:header_base_size]
+            )
+            our_sender_id = data_to_send[header_base_size:header_base_size + 8]
+            offset = header_base_size + 8
+            our_recipient_id = None
+            if our_flags & 1:  # HAS_RECIPIENT
+                our_recipient_id = data_to_send[offset:offset + 8]
+                offset += 8
+            our_payload = data_to_send[offset:offset + our_payload_len]
+            offset += our_payload_len
+            our_signature = None
+            if our_flags & 2:  # HAS_SIGNATURE
+                our_signature = data_to_send[offset:offset + 64] if len(data_to_send) >= offset + 64 else None
+        
         logger.info(f"Broadcasting message '{message.content}' ({len(data_to_send)} bytes, payload: {len(simple_payload)} bytes)")
-        logger.info(f"Packet structure: type={packet.type.value}, flags={calculated_flags}, sender_id={packet.sender_id.hex()[:8]}...")
-        logger.debug(f"First 32 bytes of packet (hex): {data_to_send[:32].hex()}")
-        logger.debug(f"First 32 bytes of packet (repr): {repr(data_to_send[:32])}")
-        logger.debug(f"Full packet (hex): {data_to_send.hex()}")
+        logger.info(f"=== OUR PACKET STRUCTURE ===")
+        logger.info(f"  Version: {our_version}, Type: {our_type}, TTL: {our_ttl}")
+        logger.info(f"  Flags: {our_flags} (calculated: {calculated_flags})")
+        logger.info(f"  Payload length: {our_payload_len}, Actual payload: {len(our_payload)}")
+        logger.info(f"  Sender ID: {our_sender_id.hex()}")
+        logger.info(f"  Recipient ID: {our_recipient_id.hex() if our_recipient_id else 'None'}")
+        logger.info(f"  Has signature: {our_signature is not None}")
+        logger.info(f"  Full packet size: {len(data_to_send)} bytes")
+        logger.info(f"  First 32 bytes (hex): {data_to_send[:32].hex()}")
+        logger.info(f"  First 32 bytes (repr): {repr(data_to_send[:32])}")
+        logger.info(f"  Payload content: {our_payload}")
+        logger.info(f"=== END OUR PACKET ===")
 
         connected_clients = [client for client in self.clients.values() if client.is_connected]
         

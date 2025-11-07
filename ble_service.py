@@ -597,14 +597,15 @@ class BLEService:
         simple_payload = message.content.encode('utf-8')
         
         # According to original bitchat documentation: "Public local chat has no security concerns"
-        # For public messages (broadcast), we don't need signatures
-        # Create packet without signature for public messages
+        # However, the phone app expects flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) even for public messages
+        # We'll send with flags=3 but use an empty/invalid signature that won't be validated
+        # Create packet with empty signature to match phone's expected format
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # No signature for public messages
+            signature=b'\x00' * 64  # Empty signature (64 zeros) - won't be validated for public messages
         )
         
         data_to_send = packet.pack()

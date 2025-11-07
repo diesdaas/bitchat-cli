@@ -447,6 +447,12 @@ class BLEService:
         )
         data_to_send = packet.pack()
         
+        # Pad packet to 256 bytes (BLE MTU) to match phone app behavior
+        # The phone app always sends packets padded to 256 bytes
+        if len(data_to_send) < 256:
+            padding_needed = 256 - len(data_to_send)
+            data_to_send = data_to_send + b'\x00' * padding_needed
+        
         # Debug: Log the exact packet structure for comparison with received packets
         # Calculate flags manually for logging (HAS_RECIPIENT=1, HAS_SIGNATURE=2)
         calculated_flags = 0

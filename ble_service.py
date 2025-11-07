@@ -348,14 +348,14 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-            packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    print(f"\n<{message.sender}>: {message.content}")
+        packet = BitchatPacket.unpack(bytes(data))
+        if packet and packet.sender_id != self.state.my_peer_id:
+            message = BitchatMessage.from_payload(packet.payload)
+            if message:
+                self.state.add_message(message)
+                print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                    self.cli_redraw()
+                self.cli_redraw()
         except Exception as e:
             logger.error(f"Error handling characteristic write: {e}", exc_info=True)
     async def start_peripheral_server(self):
@@ -737,7 +737,7 @@ class BLEService:
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # Will add signature after signing if USE_SIGNATURE is True
+            signature=None  # Will be set based on USE_EMPTY_SIGNATURE
         )
         
         signature = None
@@ -750,7 +750,7 @@ class BLEService:
             # Send without signature (flags=1, no signature field)
             logger.info(f"⚠ Sending message WITHOUT signature (flags=1, no signature)")
         
-        # Now create the final packet with signature (or without if USE_SIGNATURE is False)
+        # Now create the final packet with signature (or without if USE_EMPTY_SIGNATURE is False)
         packet.signature = signature
         data_to_send = packet.pack()
 
@@ -769,7 +769,7 @@ class BLEService:
             calculated_flags |= 2  # HAS_SIGNATURE
         
         # Log whether we're sending with or without signature
-        if not USE_SIGNATURE:
+        if not USE_EMPTY_SIGNATURE:
             logger.info(f"⚠ Sending packet WITHOUT signature (flags will be {calculated_flags} instead of 3)")
         
         # Parse our own packet to verify structure

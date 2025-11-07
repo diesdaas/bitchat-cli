@@ -507,22 +507,31 @@ class BLEService:
         client_addresses = []
         for addr, client in self.clients.items():
             if client.is_connected:
+                # BLE MTU is typically 256 bytes. Some implementations might expect packets
+                # to be padded to MTU size. Let's try padding to 256 bytes.
+                padded_data = data_to_send
+                if len(padded_data) < 256:
+                    # Pad with zeros to match BLE MTU
+                    padded_data = data_to_send + b'\x00' * (256 - len(data_to_send))
+                    logger.debug(f"Padded packet from {len(data_to_send)} to {len(padded_data)} bytes for {addr}")
+                
                 # Try with response=True first - some BLE implementations require acknowledgment
                 # If that fails, we can fall back to response=False
                 try:
                     tasks.append(
                         client.write_gatt_char(CHARACTERISTIC_UUID,
-                                             data_to_send, response=True)
+                                             padded_data, response=True)
                     )
                     client_addresses.append(addr)
-                    logger.debug(f"Using response=True for {addr}")
+                    logger.debug(f"Using response=True for {addr}, sending {len(padded_data)} bytes")
                 except Exception as e:
                     logger.warning(f"Failed to use response=True for {addr}, trying response=False: {e}")
                     tasks.append(
                         client.write_gatt_char(CHARACTERISTIC_UUID,
-                                             data_to_send, response=False)
+                                             padded_data, response=False)
                     )
                     client_addresses.append(addr)
+                    logger.debug(f"Using response=False for {addr}, sending {len(padded_data)} bytes")
         
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)

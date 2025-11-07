@@ -261,9 +261,9 @@ class BLEService:
                     logger.info(f"Connected to {device.address}, validating...")
                     
                     # Validate the peer has the correct characteristic
-                    services = await client.get_services()
+                    # client.services is a property, not a method
                     has_characteristic = False
-                    for service in services:
+                    for service in client.services:
                         for char in service.characteristics:
                             if char.uuid.lower() == CHARACTERISTIC_UUID.lower():
                                 has_characteristic = True

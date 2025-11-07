@@ -348,7 +348,7 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-        packet = BitchatPacket.unpack(bytes(data))
+            packet = BitchatPacket.unpack(bytes(data))
         if packet and packet.sender_id != self.state.my_peer_id:
             message = BitchatMessage.from_payload(packet.payload)
             if message:

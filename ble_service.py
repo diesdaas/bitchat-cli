@@ -153,6 +153,9 @@ class BLEService:
                                 header_base_format, bytes(data[:header_base_size])
                             )
                             
+                            # Test multiple signature calculation methods
+                            methods_to_test = []
+                            
                             # Method 1: Header with sender_id + recipient_id + payload (our current method)
                             header_format = f'>BB B Q B H {8}s'
                             header1 = struct.pack(
@@ -163,8 +166,9 @@ class BLEService:
                             if packet.recipient_id:
                                 data_to_verify1 += packet.recipient_id
                             data_to_verify1 += packet.payload
+                            methods_to_test.append(("Header+sender+recipient+payload", data_to_verify1))
                             
-                            # Method 2: Header WITHOUT sender_id + recipient_id + payload
+                            # Method 2: Header WITHOUT sender_id, then sender_id + recipient_id + payload
                             header_format_no_sender = '>BB B Q B H'
                             header2 = struct.pack(
                                 header_format_no_sender, packet.version, packet.type.value, packet.ttl,
@@ -174,30 +178,53 @@ class BLEService:
                             if packet.recipient_id:
                                 data_to_verify2 += packet.recipient_id
                             data_to_verify2 += packet.payload
+                            methods_to_test.append(("Header+sender+recipient+payload (no sender in header)", data_to_verify2))
                             
-                            # Method 3: Just payload (unlikely but test anyway)
-                            data_to_verify3 = packet.payload
+                            # Method 3: Just payload
+                            methods_to_test.append(("Payload only", packet.payload))
+                            
+                            # Method 4: sender_id + payload (no header, no recipient)
+                            data_to_verify4 = packet.sender_id + packet.payload
+                            methods_to_test.append(("Sender+payload", data_to_verify4))
+                            
+                            # Method 5: sender_id + recipient_id + payload (no header)
+                            data_to_verify5 = packet.sender_id
+                            if packet.recipient_id:
+                                data_to_verify5 += packet.recipient_id
+                            data_to_verify5 += packet.payload
+                            methods_to_test.append(("Sender+recipient+payload (no header)", data_to_verify5))
+                            
+                            # Method 6: Header without sender_id, then payload only (no sender, no recipient)
+                            header6 = struct.pack(
+                                header_format_no_sender, packet.version, packet.type.value, packet.ttl,
+                                packet.timestamp, flags_from_packet, len(packet.payload)
+                            )
+                            data_to_verify6 = header6 + packet.payload
+                            methods_to_test.append(("Header+payload (no sender, no recipient)", data_to_verify6))
                             
                             # Try all methods
                             valid_method = None
-                            for i, data_to_verify in enumerate([data_to_verify1, data_to_verify2, data_to_verify3], 1):
+                            for i, (method_name, data_to_verify) in enumerate(methods_to_test, 1):
                                 is_valid = self.encryption_service.verify_signature(
                                     data_to_verify, packet.signature, packet.sender_id
                                 )
                                 if is_valid:
-                                    valid_method = i
-                                    logger.info(f"✓ Phone's signature IS VALID with method {i}!")
+                                    valid_method = (i, method_name)
+                                    logger.info(f"✓ Phone's signature IS VALID with method {i}: {method_name}!")
                                     logger.info(f"  Method {i} data length: {len(data_to_verify)} bytes")
                                     logger.info(f"  Method {i} data (first 32 bytes): {data_to_verify[:32].hex()}")
+                                    logger.info(f"  Method {i} data (full): {data_to_verify.hex()}")
                                     break
                             
                             if not valid_method:
-                                logger.info(f"✗ Phone's signature is INVALID with all tested methods")
-                                logger.info(f"  Method 1 (header+sender+recipient+payload) length: {len(data_to_verify1)} bytes")
-                                logger.info(f"  Method 2 (header+sender+recipient+payload) length: {len(data_to_verify2)} bytes")
-                                logger.info(f"  Method 3 (payload only) length: {len(data_to_verify3)} bytes")
+                                logger.info(f"✗ Phone's signature is INVALID with all {len(methods_to_test)} tested methods")
                                 logger.info(f"  Packet flags from header: {flags_from_packet}")
+                                logger.info(f"  Packet type: {packet.type.value}")
+                                logger.info(f"  Has recipient: {packet.recipient_id is not None}")
                                 logger.info(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
+                                # Log first method details for debugging
+                                logger.info(f"  Method 1 data (first 32 bytes): {methods_to_test[0][1][:32].hex()}")
+                                logger.info(f"  Method 1 data (full): {methods_to_test[0][1].hex()}")
                     else:
                         # Verify signature for private messages only
                         # Reconstruct the data that was signed

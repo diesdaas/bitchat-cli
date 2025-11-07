@@ -9,6 +9,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from chat_state import ChatState
 from protocol import BitchatPacket, BitchatMessage, BROADCAST_RECIPIENT
+from encryption import EncryptionService
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class BLEService:
     def __init__(self, state: ChatState, cli_redraw_callback):
         self.state = state
         self.clients: Dict[str, BleakClient] = {}
+        self.encryption_service = EncryptionService()
         self.connecting_peers: set = set()
         self.cli_redraw = cli_redraw_callback
         self.scanner: Optional[BleakScanner] = None
@@ -119,14 +121,14 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-            packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    print(f"\n<{message.sender}>: {message.content}")
+        packet = BitchatPacket.unpack(bytes(data))
+        if packet and packet.sender_id != self.state.my_peer_id:
+            message = BitchatMessage.from_payload(packet.payload)
+            if message:
+                self.state.add_message(message)
+                print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                    self.cli_redraw()
+                self.cli_redraw()
         except Exception as e:
             logger.error(f"Error handling characteristic write: {e}")
 
@@ -303,7 +305,7 @@ class BLEService:
                 while self.scanning:
                     await asyncio.sleep(1)
                     
-        except BleakError as e:
+            except BleakError as e:
             logger.error(f"BLE Scanner error: {e}")
             print(f"[SYSTEM] [ERROR] Scanner failed: {e}. Please check your Bluetooth adapter.")
             print("[SYSTEM] [INFO] Make sure Bluetooth is enabled and you have necessary permissions.")
@@ -433,20 +435,34 @@ class BLEService:
         
         # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
         # We need to match this format exactly. The phone app always includes a signature.
-        # The phone app validates signatures and rejects empty ones (all zeros).
-        # For now, we'll generate a random signature to test if phone only checks for non-zero.
-        # In a full implementation, this would be a proper cryptographic signature.
-        random_signature = os.urandom(64)  # Generate random 64-byte signature
+        # The phone app validates signatures cryptographically, so we need real Ed25519 signatures.
         
+        # Create packet without signature first
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=random_signature  # Random signature (64 bytes) - test if phone validates cryptographically
+            signature=None  # Will add signature after signing
         )
-        data_to_send = packet.pack()
         
+        # Pack the packet without signature to get the data to sign
+        # We need to pack: header + sender_id + recipient_id + payload (everything except signature)
+        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
+        flags = 1  # HAS_RECIPIENT (we'll add HAS_SIGNATURE flag later)
+        header = struct.pack(
+            header_format, packet.version, packet.type.value, packet.ttl,
+            packet.timestamp, flags, len(packet.payload), packet.sender_id
+        )
+        data_to_sign = header + packet.recipient_id + packet.payload
+        
+        # Sign the packet data (without signature field)
+        signature = self.encryption_service.sign(data_to_sign)
+        
+        # Now create the final packet with signature
+        packet.signature = signature
+        data_to_send = packet.pack()
+
         # Pad packet to 256 bytes (BLE MTU) to match phone app behavior
         # The phone app always sends packets padded to 256 bytes
         if len(data_to_send) < 256:
@@ -491,6 +507,7 @@ class BLEService:
         if our_signature:
             logger.info(f"  Signature (first 16 bytes): {our_signature[:16].hex()}")
             logger.info(f"  Signature (all zeros?): {all(b == 0 for b in our_signature)}")
+            logger.info(f"  Signature length: {len(our_signature)} bytes (expected: 64)")
         logger.info(f"  Full packet size: {len(data_to_send)} bytes")
         logger.info(f"  First 32 bytes (hex): {data_to_send[:32].hex()}")
         logger.info(f"  First 32 bytes (repr): {repr(data_to_send[:32])}")
@@ -537,7 +554,7 @@ class BLEService:
                 except Exception as e:
                     logger.warning(f"Failed to use response=True for {addr}, trying response=False: {e}")
                     tasks.append(
-                        client.write_gatt_char(CHARACTERISTIC_UUID,
+            client.write_gatt_char(CHARACTERISTIC_UUID,
                                              padded_data, response=False)
                     )
                     client_addresses.append(addr)

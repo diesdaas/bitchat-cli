@@ -2,8 +2,9 @@
 import os
 from typing import Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.asymmetric import x25519
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 class EncryptionService:
@@ -18,6 +19,10 @@ class EncryptionService:
         self.public_key = self.private_key.public_key()
         self.peer_public_keys: dict[bytes, x25519.X25519PublicKey] = {}
         self.shared_secrets: dict[bytes, bytes] = {}
+        
+        # Ed25519 key pair for signing messages (64-byte signatures)
+        self.signing_key = Ed25519PrivateKey.generate()
+        self.signing_public_key = self.signing_key.public_key()
 
     def get_public_key_bytes(self) -> bytes:
         """Returns the raw public key for exchange."""
@@ -61,3 +66,17 @@ class EncryptionService:
             return aesgcm.decrypt(nonce, ciphertext, None)
         except Exception:  # InvalidTag
             return None
+    
+    def sign(self, data: bytes) -> bytes:
+        """
+        Signs data using Ed25519.
+        Returns a 64-byte signature.
+        """
+        return self.signing_key.sign(data)
+    
+    def get_signing_public_key_bytes(self) -> bytes:
+        """Returns the raw public key for signature verification (32 bytes)."""
+        return self.signing_public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )

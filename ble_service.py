@@ -571,35 +571,19 @@ class BLEService:
         
         # According to bitchat documentation: "Public local chat has no security concerns"
         # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
-        # BUT: Let's try sending WITHOUT signature first (flags=1) to see if that works
-        # If that doesn't work, we'll add signatures back
+        # BUT: Since we can't validate the phone's signatures, maybe signatures aren't actually required?
+        # Let's try BOTH approaches: with and without signatures
         
-        # Try approach 1: Send with signature (flags=3) - matching phone app exactly
+        # APPROACH: Send WITHOUT signature (flags=1) - test if phone accepts unsigned messages
+        # If this works, then signatures aren't required for public messages
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # Will add signature after signing
+            signature=None  # NO signature for public messages
         )
         
-        # Pack the packet without signature to get the data to sign
-        # IMPORTANT: We must sign with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) 
-        # because that's what the final packet will have. The signature must match
-        # the exact data structure that will be in the final packet.
-        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-        flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
-        header = struct.pack(
-            header_format, packet.version, packet.type.value, packet.ttl,
-            packet.timestamp, flags, len(packet.payload), packet.sender_id
-        )
-        data_to_sign = header + packet.recipient_id + packet.payload
-        
-        # Sign the packet data (without signature field, but with correct flags)
-        signature = self.encryption_service.sign(data_to_sign)
-        
-        # Now create the final packet with signature
-        packet.signature = signature
         data_to_send = packet.pack()
 
         # Pad packet to 256 bytes (BLE MTU) to match phone app behavior

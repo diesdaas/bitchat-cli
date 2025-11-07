@@ -130,47 +130,58 @@ class BLEService:
                     self._parse_announce_packet(packet)
                 
                 # Validate signature if present
+                # According to original bitchat documentation: "Public local chat has no security concerns"
+                # Skip signature verification for public messages (broadcast), only verify for private messages
                 if packet.signature and packet.sender_id != self.state.my_peer_id:
-                    # Reconstruct the data that was signed
-                    # IMPORTANT: We must use the EXACT flags from the packet, not recalculate them!
-                    # The packet was signed with the flags that are in the packet header
-                    # We need to extract the flags from the raw packet data
-                    header_base_format = '>BB B Q B H'
-                    header_base_size = struct.calcsize(header_base_format)
-                    if len(data) >= header_base_size:
-                        _, _, _, _, flags_from_packet, _ = struct.unpack(
-                            header_base_format, bytes(data[:header_base_size])
+                    # Check if this is a public message (broadcast)
+                    is_public_message = (
+                        packet.recipient_id is None or 
+                        packet.recipient_id == BROADCAST_RECIPIENT
+                    )
+                    
+                    if is_public_message:
+                        # Skip signature verification for public messages
+                        logger.debug(f"Skipping signature verification for public message from {packet.sender_id.hex()[:8]}")
+                    else:
+                        # Verify signature for private messages only
+                        # Reconstruct the data that was signed
+                        # IMPORTANT: We must use the EXACT flags from the packet, not recalculate them!
+                        header_base_format = '>BB B Q B H'
+                        header_base_size = struct.calcsize(header_base_format)
+                        if len(data) >= header_base_size:
+                            _, _, _, _, flags_from_packet, _ = struct.unpack(
+                                header_base_format, bytes(data[:header_base_size])
+                            )
+                        else:
+                            # Fallback: calculate flags (shouldn't happen)
+                            flags_from_packet = 0
+                            if packet.recipient_id is not None:
+                                flags_from_packet |= 1  # HAS_RECIPIENT
+                            flags_from_packet |= 2  # HAS_SIGNATURE
+                        
+                        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
+                        header = struct.pack(
+                            header_format, packet.version, packet.type.value, packet.ttl,
+                            packet.timestamp, flags_from_packet, len(packet.payload), packet.sender_id
                         )
-                    else:
-                        # Fallback: calculate flags (shouldn't happen)
-                        flags_from_packet = 0
-                        if packet.recipient_id is not None:
-                            flags_from_packet |= 1  # HAS_RECIPIENT
-                        flags_from_packet |= 2  # HAS_SIGNATURE
-                    
-                    header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-                    header = struct.pack(
-                        header_format, packet.version, packet.type.value, packet.ttl,
-                        packet.timestamp, flags_from_packet, len(packet.payload), packet.sender_id
-                    )
-                    data_to_verify = header
-                    if packet.recipient_id:
-                        data_to_verify += packet.recipient_id
-                    data_to_verify += packet.payload
-                    
-                    is_valid = self.encryption_service.verify_signature(
-                        data_to_verify, packet.signature, packet.sender_id
-                    )
-                    if is_valid:
-                        logger.info(f"✓ Signature valid for message from {packet.sender_id.hex()[:8]}")
-                    else:
-                        logger.warning(f"✗ Signature INVALID for message from {packet.sender_id.hex()[:8]}")
-                        # Debug: log what we're verifying
-                        logger.info(f"  Data to verify length: {len(data_to_verify)} bytes")
-                        logger.info(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
-                        logger.info(f"  Data to verify (full): {data_to_verify.hex()}")
-                        logger.info(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
-                        logger.info(f"  Packet flags: {packet.type.value}, recipient: {packet.recipient_id.hex() if packet.recipient_id else 'None'}")
+                        data_to_verify = header
+                        if packet.recipient_id:
+                            data_to_verify += packet.recipient_id
+                        data_to_verify += packet.payload
+                        
+                        is_valid = self.encryption_service.verify_signature(
+                            data_to_verify, packet.signature, packet.sender_id
+                        )
+                        if is_valid:
+                            logger.info(f"✓ Signature valid for private message from {packet.sender_id.hex()[:8]}")
+                        else:
+                            logger.warning(f"✗ Signature INVALID for private message from {packet.sender_id.hex()[:8]}")
+                            # Debug: log what we're verifying
+                            logger.info(f"  Data to verify length: {len(data_to_verify)} bytes")
+                            logger.info(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
+                            logger.info(f"  Data to verify (full): {data_to_verify.hex()}")
+                            logger.info(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
+                            logger.info(f"  Packet flags: {packet.type.value}, recipient: {packet.recipient_id.hex() if packet.recipient_id else 'None'}")
                 
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)
@@ -585,44 +596,17 @@ class BLEService:
         # Use simple text payload for compatibility
         simple_payload = message.content.encode('utf-8')
         
-        # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
-        # We must match this exactly. The phone validates signatures cryptographically.
-        
-        # Create packet without signature first
+        # According to original bitchat documentation: "Public local chat has no security concerns"
+        # For public messages (broadcast), we don't need signatures
+        # Create packet without signature for public messages
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # Will add signature after signing
+            signature=None  # No signature for public messages
         )
         
-        # Pack the packet without signature to get the data to sign
-        # IMPORTANT: We must sign with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) 
-        # because that's what the final packet will have. The signature must match
-        # the exact data structure that will be in the final packet.
-        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-        flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
-        header = struct.pack(
-            header_format, packet.version, packet.type.value, packet.ttl,
-            packet.timestamp, flags, len(packet.payload), packet.sender_id
-        )
-        data_to_sign = header + packet.recipient_id + packet.payload
-        
-        # Sign the packet data (without signature field, but with correct flags)
-        signature = self.encryption_service.sign(data_to_sign)
-        
-        # Verify our own signature to ensure our calculation is correct
-        is_valid = self.encryption_service.verify_signature(
-            data_to_sign, signature, self.state.my_peer_id
-        )
-        if not is_valid:
-            logger.error(f"CRITICAL: Our own signature validation failed! This is a bug.")
-        else:
-            logger.debug(f"✓ Our own signature is valid (self-test passed)")
-        
-        # Now create the final packet with signature
-        packet.signature = signature
         data_to_send = packet.pack()
 
         # Pad packet to 256 bytes (BLE MTU) to match phone app behavior

@@ -1,6 +1,7 @@
 # ble_service.py
 import asyncio
 import logging
+import os
 import struct
 from typing import Dict, Optional
 from bleak import BleakClient, BleakScanner, BLEDevice
@@ -435,7 +436,6 @@ class BLEService:
         # The phone app validates signatures and rejects empty ones (all zeros).
         # For now, we'll generate a random signature to test if phone only checks for non-zero.
         # In a full implementation, this would be a proper cryptographic signature.
-        import os
         random_signature = os.urandom(64)  # Generate random 64-byte signature
         
         packet = BitchatPacket(

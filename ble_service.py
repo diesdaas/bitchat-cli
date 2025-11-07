@@ -622,6 +622,18 @@ class BLEService:
         # Sign the packet data (without signature field, but with correct flags)
         signature = self.encryption_service.sign(data_to_sign)
         
+        # Verify our own signature to ensure our calculation is correct
+        is_valid = self.encryption_service.verify_signature(
+            data_to_sign, signature, self.state.my_peer_id
+        )
+        if not is_valid:
+            logger.error(f"CRITICAL: Our own signature validation failed! This indicates a bug in signature calculation.")
+            logger.error(f"  Data to sign length: {len(data_to_sign)} bytes")
+            logger.error(f"  Data to sign (first 32 bytes): {data_to_sign[:32].hex()}")
+            logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
+        else:
+            logger.debug(f"✓ Our own signature is valid (self-test passed)")
+        
         # Now create the final packet with signature
         packet.signature = signature
         data_to_send = packet.pack()

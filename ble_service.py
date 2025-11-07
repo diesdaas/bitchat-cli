@@ -152,9 +152,11 @@ class BLEService:
                     else:
                         logger.warning(f"✗ Signature INVALID for message from {packet.sender_id.hex()[:8]}")
                         # Debug: log what we're verifying
-                        logger.debug(f"  Data to verify length: {len(data_to_verify)} bytes")
-                        logger.debug(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
-                        logger.debug(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
+                        logger.info(f"  Data to verify length: {len(data_to_verify)} bytes")
+                        logger.info(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
+                        logger.info(f"  Data to verify (full): {data_to_verify.hex()}")
+                        logger.info(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
+                        logger.info(f"  Packet flags: {packet.type.value}, recipient: {packet.recipient_id.hex() if packet.recipient_id else 'None'}")
                 
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)

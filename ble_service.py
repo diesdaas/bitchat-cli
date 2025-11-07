@@ -726,10 +726,10 @@ class BLEService:
         # We'll calculate a real signature to match the phone's expected format
         # The signature won't be validated for public messages, but it needs to be present and valid format
         
-        # TEST: Try sending WITHOUT signature first to see if phone accepts it
+        # TEST: Try sending WITH empty signature (flags=3 but signature=zeros) to see if phone accepts it
         # According to whitepaper: "Public local chat has no security concerns"
-        # So public messages might not need signatures at all
-        USE_SIGNATURE = False  # Set to False to test without signature
+        # But phone might still expect flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) even for public messages
+        USE_EMPTY_SIGNATURE = True  # Set to True to send flags=3 with empty signature, False to send flags=1 without signature
         
         # Create packet
         packet = BitchatPacket(
@@ -741,7 +741,13 @@ class BLEService:
         )
         
         signature = None
-        if USE_SIGNATURE:
+        if USE_EMPTY_SIGNATURE:
+            # Send with flags=3 but empty signature (all zeros)
+            # This matches phone's format but without real signature
+            signature = b'\x00' * 64
+            logger.info(f"⚠ Sending message WITH empty signature (flags=3, signature=zeros)")
+        else:
+            # Calculate real signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
             # Calculate signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
             header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
             flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
@@ -767,7 +773,7 @@ class BLEService:
             else:
                 logger.info(f"✓ Our own signature is valid (self-test passed)")
         else:
-            logger.info(f"⚠ Sending message WITHOUT signature (testing if phone accepts unsigned packets)")
+            logger.info(f"⚠ Sending message WITHOUT signature (flags=1, no signature)")
         
         # Now create the final packet with signature (or without if USE_SIGNATURE is False)
         packet.signature = signature

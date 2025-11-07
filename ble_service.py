@@ -30,6 +30,11 @@ class BLEService:
         self.state = state
         self.clients: Dict[str, BleakClient] = {}
         self.encryption_service = EncryptionService()
+        # Add our own signing key for self-validation
+        self.encryption_service.add_peer_signing_key(
+            self.state.my_peer_id,
+            self.encryption_service.get_signing_public_key_bytes()
+        )
         self.connecting_peers: set = set()
         self.cli_redraw = cli_redraw_callback
         self.scanner: Optional[BleakScanner] = None
@@ -127,17 +132,26 @@ class BLEService:
                 # Validate signature if present
                 if packet.signature and packet.sender_id != self.state.my_peer_id:
                     # Reconstruct the data that was signed
-                    # The header format includes sender_id: '>BB B Q B H {8}s'
-                    # So we need: header (with sender_id) + recipient_id + payload
-                    header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-                    flags = 0
-                    if packet.recipient_id is not None:
-                        flags |= 1  # HAS_RECIPIENT
-                    flags |= 2  # HAS_SIGNATURE (always present if signature exists)
+                    # IMPORTANT: We must use the EXACT flags from the packet, not recalculate them!
+                    # The packet was signed with the flags that are in the packet header
+                    # We need to extract the flags from the raw packet data
+                    header_base_format = '>BB B Q B H'
+                    header_base_size = struct.calcsize(header_base_format)
+                    if len(data) >= header_base_size:
+                        _, _, _, _, flags_from_packet, _ = struct.unpack(
+                            header_base_format, bytes(data[:header_base_size])
+                        )
+                    else:
+                        # Fallback: calculate flags (shouldn't happen)
+                        flags_from_packet = 0
+                        if packet.recipient_id is not None:
+                            flags_from_packet |= 1  # HAS_RECIPIENT
+                        flags_from_packet |= 2  # HAS_SIGNATURE
                     
+                    header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
                     header = struct.pack(
                         header_format, packet.version, packet.type.value, packet.ttl,
-                        packet.timestamp, flags, len(packet.payload), packet.sender_id
+                        packet.timestamp, flags_from_packet, len(packet.payload), packet.sender_id
                     )
                     data_to_verify = header
                     if packet.recipient_id:
@@ -197,14 +211,14 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-            packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    print(f"\n<{message.sender}>: {message.content}")
+        packet = BitchatPacket.unpack(bytes(data))
+        if packet and packet.sender_id != self.state.my_peer_id:
+            message = BitchatMessage.from_payload(packet.payload)
+            if message:
+                self.state.add_message(message)
+                print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                    self.cli_redraw()
+                self.cli_redraw()
         except Exception as e:
             logger.error(f"Error handling characteristic write: {e}", exc_info=True)
 

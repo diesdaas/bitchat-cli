@@ -432,14 +432,18 @@ class BLEService:
         
         # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
         # We need to match this format exactly. The phone app always includes a signature.
-        # For now, we'll send an empty signature (64 bytes of zeros) to match the structure.
-        # In a full implementation, this would be a cryptographic signature.
+        # The phone app validates signatures and rejects empty ones (all zeros).
+        # For now, we'll generate a random signature to test if phone only checks for non-zero.
+        # In a full implementation, this would be a proper cryptographic signature.
+        import os
+        random_signature = os.urandom(64)  # Generate random 64-byte signature
+        
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=b'\x00' * 64  # Empty signature (64 bytes) - matches phone app structure
+            signature=random_signature  # Random signature (64 bytes) - test if phone validates cryptographically
         )
         data_to_send = packet.pack()
         

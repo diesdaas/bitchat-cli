@@ -493,11 +493,22 @@ class BLEService:
         client_addresses = []
         for addr, client in self.clients.items():
             if client.is_connected:
-                tasks.append(
-                    client.write_gatt_char(CHARACTERISTIC_UUID,
-                                         data_to_send, response=False)
-                )
-                client_addresses.append(addr)
+                # Try with response=True first - some BLE implementations require acknowledgment
+                # If that fails, we can fall back to response=False
+                try:
+                    tasks.append(
+                        client.write_gatt_char(CHARACTERISTIC_UUID,
+                                             data_to_send, response=True)
+                    )
+                    client_addresses.append(addr)
+                    logger.debug(f"Using response=True for {addr}")
+                except Exception as e:
+                    logger.warning(f"Failed to use response=True for {addr}, trying response=False: {e}")
+                    tasks.append(
+                        client.write_gatt_char(CHARACTERISTIC_UUID,
+                                             data_to_send, response=False)
+                    )
+                    client_addresses.append(addr)
         
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)

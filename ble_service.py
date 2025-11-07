@@ -728,8 +728,9 @@ class BLEService:
         # The signature won't be validated for public messages, but it needs to be present and valid format
         
         # TEST: Try sending WITHOUT signature first to see if phone accepts it
-        # If that doesn't work, we'll add signature back
-        USE_SIGNATURE = True  # Set to False to test without signature
+        # According to whitepaper: "Public local chat has no security concerns"
+        # So public messages might not need signatures at all
+        USE_SIGNATURE = False  # Set to False to test without signature
         
         # Create packet
         packet = BitchatPacket(

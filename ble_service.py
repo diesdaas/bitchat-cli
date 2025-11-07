@@ -411,10 +411,17 @@ class BLEService:
         data_to_send = packet.pack()
         
         # Debug: Log the exact packet structure
+        # Calculate flags manually for logging (HAS_RECIPIENT=1, HAS_SIGNATURE=2)
+        calculated_flags = 0
+        if packet.recipient_id is not None:
+            calculated_flags |= 1  # HAS_RECIPIENT
+        if packet.signature is not None:
+            calculated_flags |= 2  # HAS_SIGNATURE
+        
         logger.info(f"Broadcasting message '{message.content}' ({len(data_to_send)} bytes, payload: {len(simple_payload)} bytes)")
-        logger.info(f"Packet structure: type={packet.type.value}, flags={packet.pack()[14]}, sender_id={packet.sender_id.hex()[:8]}...")
-        logger.info(f"First 32 bytes of packet (hex): {data_to_send[:32].hex()}")
-        logger.info(f"First 32 bytes of packet (repr): {repr(data_to_send[:32])}")
+        logger.info(f"Packet structure: type={packet.type.value}, flags={calculated_flags}, sender_id={packet.sender_id.hex()[:8]}...")
+        logger.debug(f"First 32 bytes of packet (hex): {data_to_send[:32].hex()}")
+        logger.debug(f"First 32 bytes of packet (repr): {repr(data_to_send[:32])}")
         logger.debug(f"Full packet (hex): {data_to_send.hex()}")
 
         connected_clients = [client for client in self.clients.values() if client.is_connected]

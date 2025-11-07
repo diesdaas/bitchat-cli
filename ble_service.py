@@ -1,6 +1,7 @@
 # ble_service.py
 import asyncio
 import logging
+import struct
 from typing import Dict, Optional
 from bleak import BleakClient, BleakScanner, BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -37,11 +38,16 @@ class BLEService:
         """Handles incoming data packets from peers when acting as Central."""
         try:
             logger.info(f"Notification received: {len(data)} bytes from characteristic {characteristic.uuid}")
-            logger.debug(f"Raw data: {data.hex()}")
+            # Log first 64 bytes in hex for debugging
+            hex_preview = data.hex()[:128]  # First 64 bytes as hex string
+            logger.info(f"First 64 bytes (hex): {hex_preview}...")
+            logger.info(f"First 32 bytes (repr): {repr(bytes(data[:32]))}")
             
             packet = BitchatPacket.unpack(bytes(data))
             if packet:
-                logger.debug(f"Packet unpacked: sender_id={packet.sender_id.hex()}, my_id={self.state.my_peer_id.hex()}")
+                logger.info(f"Packet unpacked successfully: sender_id={packet.sender_id.hex()[:8]}..., my_id={self.state.my_peer_id.hex()[:8]}...")
+                logger.info(f"Payload length: {len(packet.payload)} bytes")
+                logger.info(f"Payload preview: {packet.payload[:100]}")
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)
                     if message:
@@ -51,11 +57,24 @@ class BLEService:
                         print(f"\n<{message.sender}>: {message.content}")
                         self.cli_redraw()
                     else:
-                        logger.warning("Failed to parse message from payload")
+                        logger.warning(f"Failed to parse message from payload. Payload: {packet.payload[:200]}")
+                        logger.warning(f"Payload as string (attempt): {repr(packet.payload[:200])}")
                 else:
                     logger.debug("Ignoring message from self")
             else:
                 logger.warning(f"Failed to unpack packet from {len(data)} bytes")
+                # Try to analyze the structure
+                if len(data) >= 20:
+                    try:
+                        header_base_format = '>BB B Q B H'
+                        header_base_size = struct.calcsize(header_base_format)
+                        version, msg_type_val, ttl, timestamp, flags, payload_len = struct.unpack(
+                            header_base_format, data[:header_base_size]
+                        )
+                        logger.warning(f"Header analysis: version={version}, type={msg_type_val}, ttl={ttl}, flags={flags}, payload_len={payload_len}")
+                        logger.warning(f"Expected total size: {header_base_size + 8 + payload_len} bytes, got {len(data)} bytes")
+                    except Exception as e:
+                        logger.warning(f"Could not analyze header: {e}")
         except Exception as e:
             logger.error(f"Error handling notification: {e}", exc_info=True)
 

@@ -348,14 +348,14 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-            packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    print(f"\n<{message.sender}>: {message.content}")
+        packet = BitchatPacket.unpack(bytes(data))
+        if packet and packet.sender_id != self.state.my_peer_id:
+            message = BitchatMessage.from_payload(packet.payload)
+            if message:
+                self.state.add_message(message)
+                print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                    self.cli_redraw()
+                self.cli_redraw()
         except Exception as e:
             logger.error(f"Error handling characteristic write: {e}", exc_info=True)
 
@@ -787,6 +787,10 @@ class BLEService:
             calculated_flags |= 1  # HAS_RECIPIENT
         if packet.signature is not None:
             calculated_flags |= 2  # HAS_SIGNATURE
+        
+        # Log whether we're sending with or without signature
+        if not USE_SIGNATURE:
+            logger.info(f"⚠ Sending packet WITHOUT signature (flags will be {calculated_flags} instead of 3)")
         
         # Parse our own packet to verify structure
         header_base_format = '>BB B Q B H'

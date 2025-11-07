@@ -126,9 +126,10 @@ class BLEService:
                 
                 # Validate signature if present
                 if packet.signature and packet.sender_id != self.state.my_peer_id:
-                    # Reconstruct the data that was signed (header + sender_id + recipient_id + payload)
-                    header_format = f'>BB B Q B H'
-                    header_base_size = struct.calcsize(header_format)
+                    # Reconstruct the data that was signed
+                    # The header format includes sender_id: '>BB B Q B H {8}s'
+                    # So we need: header (with sender_id) + recipient_id + payload
+                    header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
                     flags = 0
                     if packet.recipient_id is not None:
                         flags |= 1  # HAS_RECIPIENT
@@ -136,9 +137,9 @@ class BLEService:
                     
                     header = struct.pack(
                         header_format, packet.version, packet.type.value, packet.ttl,
-                        packet.timestamp, flags, len(packet.payload)
+                        packet.timestamp, flags, len(packet.payload), packet.sender_id
                     )
-                    data_to_verify = header + packet.sender_id
+                    data_to_verify = header
                     if packet.recipient_id:
                         data_to_verify += packet.recipient_id
                     data_to_verify += packet.payload
@@ -150,6 +151,10 @@ class BLEService:
                         logger.info(f"✓ Signature valid for message from {packet.sender_id.hex()[:8]}")
                     else:
                         logger.warning(f"✗ Signature INVALID for message from {packet.sender_id.hex()[:8]}")
+                        # Debug: log what we're verifying
+                        logger.debug(f"  Data to verify length: {len(data_to_verify)} bytes")
+                        logger.debug(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
+                        logger.debug(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
                 
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)

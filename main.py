@@ -1,8 +1,22 @@
 # main.py
 import asyncio
+import logging
 import os
+import sys
 from chat_state import ChatState
 from cli import CLI
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Set bleak logger to INFO to reduce noise
+logging.getLogger('bleak').setLevel(logging.WARNING)
 
 
 def main():

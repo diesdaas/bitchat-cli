@@ -84,15 +84,23 @@ class CLI:
         print(
             f"[SYSTEM] Welcome to Bitchat CLI! Your nickname is {self.state.nickname}.")
         print("[SYSTEM] All messages are broadcast publicly to connected peers.")
-        print("[SYSTEM] I'm now scanning for other peers over Bluetooth...")
+        print("[SYSTEM] Starting dual-mode BLE (Central + Peripheral)...")
         print(
             "[SYSTEM] Type a message and press Enter to broadcast, or /help for commands.")
 
         scan_task = None
+        peripheral_task = None
         try:
             with patch_stdout():
+                # Start both Central (scanning) and Peripheral (advertising) modes
                 scan_task = asyncio.create_task(
                     self.ble_service.scan_and_connect())
+                peripheral_task = asyncio.create_task(
+                    self.ble_service.start_peripheral_server())
+                
+                # Give services time to start
+                await asyncio.sleep(1)
+                
                 while True:
                     self.session.message = self.get_prompt_message
                     input_text = await self.session.prompt_async()
@@ -114,15 +122,23 @@ class CLI:
 
         except (EOFError, KeyboardInterrupt):
             print("\n[SYSTEM] Shutting down...")
+            
+            # Cancel tasks
             if scan_task:
                 scan_task.cancel()
+            if peripheral_task:
+                peripheral_task.cancel()
+            
+            # Wait for tasks to finish
+            if scan_task or peripheral_task:
+                await asyncio.gather(
+                    scan_task if scan_task else asyncio.sleep(0),
+                    peripheral_task if peripheral_task else asyncio.sleep(0),
+                    return_exceptions=True
+                )
 
-            print("[SYSTEM] Disconnecting from peers...")
-            disconnect_tasks = [
-                client.disconnect() for client in self.ble_service.clients.values() if client.is_connected
-            ]
-            if disconnect_tasks:
-                await asyncio.gather(*disconnect_tasks, return_exceptions=True)
-            print("[SYSTEM] All peers disconnected.")
+            # Clean shutdown
+            await self.ble_service.shutdown()
+            print("[SYSTEM] All services stopped.")
 
         print("[SYSTEM] Shutdown complete.")

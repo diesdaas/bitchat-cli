@@ -766,6 +766,8 @@ class BLEService:
                 logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
             else:
                 logger.info(f"✓ Our own signature is valid (self-test passed)")
+        else:
+            logger.info(f"⚠ Sending message WITHOUT signature (testing if phone accepts unsigned packets)")
         
         # Now create the final packet with signature (or without if USE_SIGNATURE is False)
         packet.signature = signature

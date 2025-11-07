@@ -121,16 +121,16 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-        packet = BitchatPacket.unpack(bytes(data))
-        if packet and packet.sender_id != self.state.my_peer_id:
-            message = BitchatMessage.from_payload(packet.payload)
-            if message:
-                self.state.add_message(message)
-                print(f"\n<{message.sender}>: {message.content}")
+            packet = BitchatPacket.unpack(bytes(data))
+            if packet and packet.sender_id != self.state.my_peer_id:
+                message = BitchatMessage.from_payload(packet.payload)
+                if message:
+                    self.state.add_message(message)
+                    print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                self.cli_redraw()
+                    self.cli_redraw()
         except Exception as e:
-            logger.error(f"Error handling characteristic write: {e}")
+            logger.error(f"Error handling characteristic write: {e}", exc_info=True)
 
     async def start_peripheral_server(self):
         """Starts the BLE Peripheral server to advertise this device."""
@@ -296,20 +296,20 @@ class BLEService:
             self.scanning = True
             
             # Start scanning with callback
-            async with self.scanner:
-                logger.info("Scanner started, waiting for devices...")
-                print("[SYSTEM] Scanner active - searching for bitchat peers...")
-                print("[SYSTEM] [TIP] Make sure other bitchat devices are nearby and advertising...")
-                
-                # Keep scanning indefinitely
-                while self.scanning:
-                    await asyncio.sleep(1)
+            try:
+                async with self.scanner:
+                    logger.info("Scanner started, waiting for devices...")
+                    print("[SYSTEM] Scanner active - searching for bitchat peers...")
+                    print("[SYSTEM] [TIP] Make sure other bitchat devices are nearby and advertising...")
                     
+                    # Keep scanning indefinitely
+                    while self.scanning:
+                        await asyncio.sleep(1)
             except BleakError as e:
-            logger.error(f"BLE Scanner error: {e}")
-            print(f"[SYSTEM] [ERROR] Scanner failed: {e}. Please check your Bluetooth adapter.")
-            print("[SYSTEM] [INFO] Make sure Bluetooth is enabled and you have necessary permissions.")
-            self.scanning = False
+                logger.error(f"BLE Scanner error: {e}")
+                print(f"[SYSTEM] [ERROR] Scanner failed: {e}. Please check your Bluetooth adapter.")
+                print("[SYSTEM] [INFO] Make sure Bluetooth is enabled and you have necessary permissions.")
+                self.scanning = False
         except Exception as e:
             logger.error(f"Unexpected error in scanner: {e}", exc_info=True)
             print(f"[SYSTEM] [ERROR] Unexpected scanner error: {e}")

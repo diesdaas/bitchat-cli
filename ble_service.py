@@ -390,14 +390,25 @@ class BLEService:
     async def broadcast(self, message: BitchatMessage):
         """Sends a message to all connected and validated peers."""
         message.sender = self.state.nickname
+        
+        # For compatibility with the phone app, send as plain text payload
+        # The phone app seems to use MessageType 0x02 (KEY_EXCHANGE) for messages
+        # and expects simple text payloads, not our string format
+        from protocol import MessageType
+        
+        # Use simple text payload for compatibility
+        simple_payload = message.content.encode('utf-8')
+        
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
-            payload=message.to_payload()
+            payload=simple_payload,
+            type=MessageType.KEY_EXCHANGE  # Use 0x02 like the phone app
         )
         data_to_send = packet.pack()
         
-        logger.info(f"Broadcasting message '{message.content}' ({len(data_to_send)} bytes)")
+        logger.info(f"Broadcasting message '{message.content}' ({len(data_to_send)} bytes, payload: {len(simple_payload)} bytes)")
+        logger.debug(f"Packet type: {packet.type.value}, Payload preview: {simple_payload[:50]}")
 
         connected_clients = [client for client in self.clients.values() if client.is_connected]
         
@@ -420,6 +431,7 @@ class BLEService:
         
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            success_count = 0
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     failed_client_addr = client_addresses[i]
@@ -427,7 +439,13 @@ class BLEService:
                     print(
                         f"[SYSTEM] [ERROR] Failed to send message to {failed_client_addr}: {result}")
                 else:
-                    logger.debug(f"Successfully sent message to {client_addresses[i]}")
+                    success_count += 1
+                    logger.info(f"Successfully sent message to {client_addresses[i]}")
+            
+            if success_count > 0:
+                logger.info(f"Message sent successfully to {success_count}/{len(tasks)} peer(s)")
+            else:
+                logger.warning(f"Failed to send message to all {len(tasks)} peer(s)")
 
     async def shutdown(self):
         """Clean shutdown of all BLE services."""

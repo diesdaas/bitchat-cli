@@ -747,32 +747,7 @@ class BLEService:
             signature = b'\x00' * 64
             logger.info(f"⚠ Sending message WITH empty signature (flags=3, signature=zeros)")
         else:
-            # Calculate real signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
-            # Calculate signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
-            header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-            flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
-            header = struct.pack(
-                header_format, packet.version, packet.type.value, packet.ttl,
-                packet.timestamp, flags, len(packet.payload), packet.sender_id
-            )
-            data_to_sign = header + packet.recipient_id + packet.payload
-            
-            # Sign the packet data (without signature field, but with correct flags)
-            signature = self.encryption_service.sign(data_to_sign)
-            
-            # Verify our own signature to ensure our calculation is correct
-            is_valid = self.encryption_service.verify_signature(
-                data_to_sign, signature, self.state.my_peer_id
-            )
-            if not is_valid:
-                logger.error(f"CRITICAL: Our own signature validation failed! This indicates a bug in signature calculation.")
-                logger.error(f"  Data to sign length: {len(data_to_sign)} bytes")
-                logger.error(f"  Data to sign (first 32 bytes): {data_to_sign[:32].hex()}")
-                logger.error(f"  Data to sign (full): {data_to_sign.hex()}")
-                logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
-            else:
-                logger.info(f"✓ Our own signature is valid (self-test passed)")
-        else:
+            # Send without signature (flags=1, no signature field)
             logger.info(f"⚠ Sending message WITHOUT signature (flags=1, no signature)")
         
         # Now create the final packet with signature (or without if USE_SIGNATURE is False)

@@ -598,16 +598,32 @@ class BLEService:
         
         # According to original bitchat documentation: "Public local chat has no security concerns"
         # However, the phone app expects flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) even for public messages
-        # We'll send with flags=3 but use an empty/invalid signature that won't be validated
-        # Create packet with empty signature to match phone's expected format
+        # We'll calculate a real signature to match the phone's expected format
+        # The signature won't be validated for public messages, but it needs to be present and valid format
+        
+        # Create packet without signature first to calculate what to sign
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=b'\x00' * 64  # Empty signature (64 zeros) - won't be validated for public messages
+            signature=None  # Will add signature after signing
         )
         
+        # Calculate signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
+        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
+        flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
+        header = struct.pack(
+            header_format, packet.version, packet.type.value, packet.ttl,
+            packet.timestamp, flags, len(packet.payload), packet.sender_id
+        )
+        data_to_sign = header + packet.recipient_id + packet.payload
+        
+        # Sign the packet data (without signature field, but with correct flags)
+        signature = self.encryption_service.sign(data_to_sign)
+        
+        # Now create the final packet with signature
+        packet.signature = signature
         data_to_send = packet.pack()
 
         # Pad packet to 256 bytes (BLE MTU) to match phone app behavior

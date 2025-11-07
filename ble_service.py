@@ -124,6 +124,33 @@ class BLEService:
                 if packet.type.value == 0x01:  # ANNOUNCE
                     self._parse_announce_packet(packet)
                 
+                # Validate signature if present
+                if packet.signature and packet.sender_id != self.state.my_peer_id:
+                    # Reconstruct the data that was signed (header + sender_id + recipient_id + payload)
+                    header_format = f'>BB B Q B H'
+                    header_base_size = struct.calcsize(header_format)
+                    flags = 0
+                    if packet.recipient_id is not None:
+                        flags |= 1  # HAS_RECIPIENT
+                    flags |= 2  # HAS_SIGNATURE (always present if signature exists)
+                    
+                    header = struct.pack(
+                        header_format, packet.version, packet.type.value, packet.ttl,
+                        packet.timestamp, flags, len(packet.payload)
+                    )
+                    data_to_verify = header + packet.sender_id
+                    if packet.recipient_id:
+                        data_to_verify += packet.recipient_id
+                    data_to_verify += packet.payload
+                    
+                    is_valid = self.encryption_service.verify_signature(
+                        data_to_verify, packet.signature, packet.sender_id
+                    )
+                    if is_valid:
+                        logger.info(f"✓ Signature valid for message from {packet.sender_id.hex()[:8]}")
+                    else:
+                        logger.warning(f"✗ Signature INVALID for message from {packet.sender_id.hex()[:8]}")
+                
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)
                     if message:

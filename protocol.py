@@ -126,28 +126,108 @@ class BitchatMessage:
     @staticmethod
     def from_payload(payload: bytes) -> Optional['BitchatMessage']:
         """Deserializes a byte payload into a BitchatMessage."""
+        if not payload:
+            return None
+            
+        # First, try to decode as UTF-8 string (our format)
         try:
             decoded_payload = payload.decode('utf-8')
-            parts = decoded_payload.split('|')
-            msg_data = {}
-            for part in parts:
-                # Ensure there is a key-value pair
-                if ':' in part:
-                    key, value = part.split(':', 1)
-                    msg_data[key] = value
+            # Check if it's our pipe-separated format
+            if '|' in decoded_payload and ':' in decoded_payload:
+                parts = decoded_payload.split('|')
+                msg_data = {}
+                for part in parts:
+                    # Ensure there is a key-value pair
+                    if ':' in part:
+                        key, value = part.split(':', 1)
+                        msg_data[key] = value
 
-            # Basic check for required fields
-            if 'c' not in msg_data:
-                return None
-
-            return BitchatMessage(
-                id=msg_data.get('id', str(uuid.uuid4())),
-                sender=msg_data.get('s', 'unknown'),
-                content=msg_data.get('c', ''),
-                timestamp=int(msg_data.get('t', 0)),
-                is_private=msg_data.get('p') == 'True',
-                channel=msg_data.get('ch') or None
-            )
-        except (IndexError, ValueError, UnicodeDecodeError):
-            # Handles malformed or un-decodable payloads
-            return None
+                # Basic check for required fields
+                if 'c' in msg_data:
+                    return BitchatMessage(
+                        id=msg_data.get('id', str(uuid.uuid4())),
+                        sender=msg_data.get('s', 'unknown'),
+                        content=msg_data.get('c', ''),
+                        timestamp=int(msg_data.get('t', 0)),
+                        is_private=msg_data.get('p') == 'True',
+                        channel=msg_data.get('ch') or None
+                    )
+        except (UnicodeDecodeError, ValueError):
+            pass
+        
+        # If that fails, try to parse as simple text message (for compatibility)
+        # Some implementations might send plain text
+        try:
+            # Try to decode as UTF-8 - if it's valid text, use it
+            text_content = payload.decode('utf-8', errors='strict')
+            # If it's readable text (not binary), use it as message content
+            if text_content.isprintable() or all(ord(c) < 128 for c in text_content):
+                return BitchatMessage(
+                    sender='unknown',
+                    content=text_content,
+                    timestamp=int(time.time() * 1000)
+                )
+        except (UnicodeDecodeError, ValueError):
+            pass
+        
+        # If payload starts with binary format indicators, try to parse binary format
+        # Format might be: [type][length][data]...
+        if len(payload) > 0:
+            msg_type = payload[0]
+            # If it's a simple text message (type 0x04 = MESSAGE), try to extract text
+            if msg_type == 0x04 and len(payload) > 1:
+                # Skip type byte, try to decode rest as text
+                try:
+                    text_content = payload[1:].decode('utf-8', errors='ignore')
+                    if text_content and len(text_content) > 0:
+                        return BitchatMessage(
+                            sender='unknown',
+                            content=text_content,
+                            timestamp=int(time.time() * 1000)
+                        )
+                except:
+                    pass
+        
+        # Last resort: if payload is short and looks like text, try direct decode
+        # This handles cases like b'rrtt' which are plain text messages
+        if len(payload) < 100:  # Short messages might be plain text
+            try:
+                # Try to find printable text in the payload
+                text_parts = []
+                i = 0
+                while i < len(payload):
+                    if 32 <= payload[i] <= 126:  # Printable ASCII
+                        start = i
+                        while i < len(payload) and 32 <= payload[i] <= 126:
+                            i += 1
+                        text_parts.append(payload[start:i].decode('utf-8'))
+                    else:
+                        i += 1
+                
+                if text_parts:
+                    # Use the longest text part as content
+                    content = max(text_parts, key=len)
+                    if len(content) >= 1:  # At least 1 character
+                        return BitchatMessage(
+                            sender='unknown',
+                            content=content,
+                            timestamp=int(time.time() * 1000)
+                        )
+            except:
+                pass
+        
+        # Special case: if entire payload is printable ASCII, use it directly
+        if len(payload) > 0 and len(payload) < 200:
+            try:
+                if all(32 <= b <= 126 for b in payload):  # All printable ASCII
+                    content = payload.decode('utf-8')
+                    if len(content) > 0:
+                        return BitchatMessage(
+                            sender='unknown',
+                            content=content,
+                            timestamp=int(time.time() * 1000)
+                        )
+            except:
+                pass
+        
+        return None

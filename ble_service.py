@@ -202,6 +202,49 @@ class BLEService:
                             data_to_verify6 = header6 + packet.payload
                             methods_to_test.append(("Header+payload (no sender, no recipient)", data_to_verify6))
                             
+                            # Method 7: Entire packet (256 bytes) WITHOUT signature field (last 64 bytes)
+                            # This tests if phone signs the entire padded packet minus signature
+                            if len(data) == 256:
+                                # Calculate where signature starts
+                                header_base_size = struct.calcsize('>BB B Q B H')
+                                offset = header_base_size + 8  # +8 for sender_id
+                                if flags_from_packet & 1:  # HAS_RECIPIENT
+                                    offset += 8
+                                offset += len(packet.payload)
+                                # Everything before signature (should be 192 bytes for 256-byte packet)
+                                data_to_verify7 = bytes(data[:offset])
+                                methods_to_test.append(("Entire packet minus signature (192 bytes)", data_to_verify7))
+                            
+                            # Method 8: Entire packet (256 bytes) WITHOUT signature field, but include padding
+                            # This tests if phone signs everything except the signature bytes
+                            if len(data) == 256:
+                                # Find signature offset
+                                header_base_size = struct.calcsize('>BB B Q B H')
+                                sig_offset = header_base_size + 8  # +8 for sender_id
+                                if flags_from_packet & 1:  # HAS_RECIPIENT
+                                    sig_offset += 8
+                                sig_offset += len(packet.payload)
+                                # Everything before signature + everything after signature (padding)
+                                data_before_sig = bytes(data[:sig_offset])
+                                data_after_sig = bytes(data[sig_offset + 64:])  # Skip 64-byte signature
+                                data_to_verify8 = data_before_sig + data_after_sig
+                                methods_to_test.append(("Packet minus signature bytes (with padding)", data_to_verify8))
+                            
+                            # Method 9: Raw packet data without signature (reconstruct from packet object)
+                            # This is similar to Method 1 but uses the exact packet structure
+                            packet_without_sig = BitchatPacket(
+                                version=packet.version,
+                                type=packet.type,
+                                ttl=packet.ttl,
+                                timestamp=packet.timestamp,
+                                sender_id=packet.sender_id,
+                                recipient_id=packet.recipient_id,
+                                payload=packet.payload,
+                                signature=None
+                            )
+                            data_to_verify9 = packet_without_sig.pack()
+                            methods_to_test.append(("Reconstructed packet without signature", data_to_verify9))
+                            
                             # Try all methods
                             valid_method = None
                             for i, (method_name, data_to_verify) in enumerate(methods_to_test, 1):
@@ -305,14 +348,14 @@ class BLEService:
         """Handler for write requests when acting as Peripheral."""
         try:
             logger.debug(f"Received write on characteristic {characteristic.uuid}: {len(data)} bytes")
-            packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    print(f"\n<{message.sender}>: {message.content}")
+        packet = BitchatPacket.unpack(bytes(data))
+        if packet and packet.sender_id != self.state.my_peer_id:
+            message = BitchatMessage.from_payload(packet.payload)
+            if message:
+                self.state.add_message(message)
+                print(f"\n<{message.sender}>: {message.content}")
                     logger.debug(f"Received message via Peripheral mode from {message.sender}")
-                    self.cli_redraw()
+                self.cli_redraw()
         except Exception as e:
             logger.error(f"Error handling characteristic write: {e}", exc_info=True)
 
@@ -684,41 +727,47 @@ class BLEService:
         # We'll calculate a real signature to match the phone's expected format
         # The signature won't be validated for public messages, but it needs to be present and valid format
         
-        # Create packet without signature first to calculate what to sign
+        # TEST: Try sending WITHOUT signature first to see if phone accepts it
+        # If that doesn't work, we'll add signature back
+        USE_SIGNATURE = True  # Set to False to test without signature
+        
+        # Create packet
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # Will add signature after signing
+            signature=None  # Will add signature after signing if USE_SIGNATURE is True
         )
         
-        # Calculate signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
-        header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-        flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
-        header = struct.pack(
-            header_format, packet.version, packet.type.value, packet.ttl,
-            packet.timestamp, flags, len(packet.payload), packet.sender_id
-        )
-        data_to_sign = header + packet.recipient_id + packet.payload
+        signature = None
+        if USE_SIGNATURE:
+            # Calculate signature with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) to match final packet
+            header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
+            flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
+            header = struct.pack(
+                header_format, packet.version, packet.type.value, packet.ttl,
+                packet.timestamp, flags, len(packet.payload), packet.sender_id
+            )
+            data_to_sign = header + packet.recipient_id + packet.payload
+            
+            # Sign the packet data (without signature field, but with correct flags)
+            signature = self.encryption_service.sign(data_to_sign)
+            
+            # Verify our own signature to ensure our calculation is correct
+            is_valid = self.encryption_service.verify_signature(
+                data_to_sign, signature, self.state.my_peer_id
+            )
+            if not is_valid:
+                logger.error(f"CRITICAL: Our own signature validation failed! This indicates a bug in signature calculation.")
+                logger.error(f"  Data to sign length: {len(data_to_sign)} bytes")
+                logger.error(f"  Data to sign (first 32 bytes): {data_to_sign[:32].hex()}")
+                logger.error(f"  Data to sign (full): {data_to_sign.hex()}")
+                logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
+            else:
+                logger.info(f"✓ Our own signature is valid (self-test passed)")
         
-        # Sign the packet data (without signature field, but with correct flags)
-        signature = self.encryption_service.sign(data_to_sign)
-        
-        # Verify our own signature to ensure our calculation is correct
-        is_valid = self.encryption_service.verify_signature(
-            data_to_sign, signature, self.state.my_peer_id
-        )
-        if not is_valid:
-            logger.error(f"CRITICAL: Our own signature validation failed! This indicates a bug in signature calculation.")
-            logger.error(f"  Data to sign length: {len(data_to_sign)} bytes")
-            logger.error(f"  Data to sign (first 32 bytes): {data_to_sign[:32].hex()}")
-            logger.error(f"  Data to sign (full): {data_to_sign.hex()}")
-            logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
-        else:
-            logger.info(f"✓ Our own signature is valid (self-test passed)")
-        
-        # Now create the final packet with signature
+        # Now create the final packet with signature (or without if USE_SIGNATURE is False)
         packet.signature = signature
         data_to_send = packet.pack()
 

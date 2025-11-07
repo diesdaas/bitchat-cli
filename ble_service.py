@@ -141,7 +141,41 @@ class BLEService:
                     
                     if is_public_message:
                         # Skip signature verification for public messages
+                        # BUT: Try to verify anyway to see if phone's signatures are valid (for debugging)
                         logger.debug(f"Skipping signature verification for public message from {packet.sender_id.hex()[:8]}")
+                        
+                        # DEBUG: Try to verify phone's signature to understand how they sign
+                        header_base_format = '>BB B Q B H'
+                        header_base_size = struct.calcsize(header_base_format)
+                        if len(data) >= header_base_size:
+                            _, _, _, _, flags_from_packet, _ = struct.unpack(
+                                header_base_format, bytes(data[:header_base_size])
+                            )
+                            
+                            header_format = f'>BB B Q B H {8}s'
+                            header = struct.pack(
+                                header_format, packet.version, packet.type.value, packet.ttl,
+                                packet.timestamp, flags_from_packet, len(packet.payload), packet.sender_id
+                            )
+                            data_to_verify = header
+                            if packet.recipient_id:
+                                data_to_verify += packet.recipient_id
+                            data_to_verify += packet.payload
+                            
+                            # Try to verify phone's signature
+                            is_valid = self.encryption_service.verify_signature(
+                                data_to_verify, packet.signature, packet.sender_id
+                            )
+                            if is_valid:
+                                logger.info(f"✓ Phone's signature IS VALID (but we skip validation for public messages)")
+                            else:
+                                logger.info(f"✗ Phone's signature is INVALID (but we skip validation for public messages)")
+                                logger.info(f"  This suggests phone signs differently than we expect")
+                                logger.info(f"  Data to verify length: {len(data_to_verify)} bytes")
+                                logger.info(f"  Data to verify (first 32 bytes): {data_to_verify[:32].hex()}")
+                                logger.info(f"  Data to verify (full): {data_to_verify.hex()}")
+                                logger.info(f"  Signature (first 16 bytes): {packet.signature[:16].hex()}")
+                                logger.info(f"  Packet flags from header: {flags_from_packet}")
                     else:
                         # Verify signature for private messages only
                         # Reconstruct the data that was signed
@@ -630,9 +664,10 @@ class BLEService:
             logger.error(f"CRITICAL: Our own signature validation failed! This indicates a bug in signature calculation.")
             logger.error(f"  Data to sign length: {len(data_to_sign)} bytes")
             logger.error(f"  Data to sign (first 32 bytes): {data_to_sign[:32].hex()}")
+            logger.error(f"  Data to sign (full): {data_to_sign.hex()}")
             logger.error(f"  Signature (first 16 bytes): {signature[:16].hex()}")
         else:
-            logger.debug(f"✓ Our own signature is valid (self-test passed)")
+            logger.info(f"✓ Our own signature is valid (self-test passed)")
         
         # Now create the final packet with signature
         packet.signature = signature

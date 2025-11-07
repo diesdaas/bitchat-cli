@@ -36,17 +36,28 @@ class BLEService:
     def notification_handler(self, characteristic: BleakGATTCharacteristic, data: bytearray):
         """Handles incoming data packets from peers when acting as Central."""
         try:
+            logger.info(f"Notification received: {len(data)} bytes from characteristic {characteristic.uuid}")
+            logger.debug(f"Raw data: {data.hex()}")
+            
             packet = BitchatPacket.unpack(bytes(data))
-            if packet and packet.sender_id != self.state.my_peer_id:
-                message = BitchatMessage.from_payload(packet.payload)
-                if message:
-                    self.state.add_message(message)
-                    # Display the message and redraw the prompt
-                    print(f"\n<{message.sender}>: {message.content}")
-                    logger.debug(f"Received message from {message.sender}: {message.content}")
-                    self.cli_redraw()
+            if packet:
+                logger.debug(f"Packet unpacked: sender_id={packet.sender_id.hex()}, my_id={self.state.my_peer_id.hex()}")
+                if packet.sender_id != self.state.my_peer_id:
+                    message = BitchatMessage.from_payload(packet.payload)
+                    if message:
+                        logger.info(f"Message parsed: {message.sender}: {message.content}")
+                        self.state.add_message(message)
+                        # Display the message and redraw the prompt
+                        print(f"\n<{message.sender}>: {message.content}")
+                        self.cli_redraw()
+                    else:
+                        logger.warning("Failed to parse message from payload")
+                else:
+                    logger.debug("Ignoring message from self")
+            else:
+                logger.warning(f"Failed to unpack packet from {len(data)} bytes")
         except Exception as e:
-            logger.error(f"Error handling notification: {e}")
+            logger.error(f"Error handling notification: {e}", exc_info=True)
 
     async def characteristic_read_handler(self, characteristic: BleakGATTCharacteristic) -> bytearray:
         """Handler for read requests when acting as Peripheral."""
@@ -182,14 +193,25 @@ class BLEService:
             )
             
             if is_bitchat_peer:
-                logger.info(f"Found bitchat peer: {device.address} ({device_name})")
-                print(f"[SYSTEM] Found peer: {device_name or device.address}")
+                # Check if already connected or connecting
+                is_connected = device.address in self.clients
+                is_connecting = device.address in self.connecting_peers
                 
-                # Try to connect if not already connected or connecting
-                if (device.address not in self.clients and 
-                    device.address not in self.connecting_peers):
+                # Also check if client is still actually connected
+                if is_connected:
+                    client = self.clients.get(device.address)
+                    if client and not client.is_connected:
+                        logger.info(f"Client {device.address} was disconnected, cleaning up")
+                        self.on_disconnect(client)
+                        is_connected = False
+                
+                if not is_connected and not is_connecting:
+                    logger.info(f"Found bitchat peer: {device.address} ({device_name})")
+                    print(f"[SYSTEM] Found peer: {device_name or device.address}")
                     self.connecting_peers.add(device.address)
                     asyncio.create_task(self.connect_to_device(device))
+                else:
+                    logger.debug(f"Ignoring already connected/connecting peer: {device.address}")
             else:
                 logger.debug(f"Device {device.address} is not a bitchat peer (no matching service UUID)")
                 
@@ -262,16 +284,18 @@ class BLEService:
                     
                     # Validate the peer has the correct characteristic
                     # client.services is a property, not a method
-                    has_characteristic = False
+                    target_characteristic = None
                     for service in client.services:
+                        logger.debug(f"Service {service.uuid} has {len(service.characteristics)} characteristics")
                         for char in service.characteristics:
+                            logger.debug(f"  Characteristic: {char.uuid} (props: {char.properties})")
                             if char.uuid.lower() == CHARACTERISTIC_UUID.lower():
-                                has_characteristic = True
+                                target_characteristic = char
                                 break
-                        if has_characteristic:
+                        if target_characteristic:
                             break
                     
-                    if has_characteristic:
+                    if target_characteristic:
                         peer_name = device.name or f"peer-{device.address[-5:]}"
                         print(
                             f"[SYSTEM] ✓ Connected to {peer_name} ({device.address})")
@@ -280,9 +304,10 @@ class BLEService:
                         self.clients[device.address] = client
                         self.state.add_peer(device.address, peer_name)
                         
-                        # Start notifications
-                        await client.start_notify(CHARACTERISTIC_UUID, self.notification_handler)
-                        logger.info(f"Started notifications for {device.address}")
+                        # Start notifications using the actual characteristic instance
+                        # This ensures we use the correct UUID format
+                        await client.start_notify(target_characteristic.uuid, self.notification_handler)
+                        logger.info(f"Started notifications for {device.address} on characteristic {target_characteristic.uuid}")
                         
                         self.cli_redraw()
                         return  # Success, exit the retry loop and function
@@ -352,29 +377,38 @@ class BLEService:
             payload=message.to_payload()
         )
         data_to_send = packet.pack()
+        
+        logger.info(f"Broadcasting message '{message.content}' ({len(data_to_send)} bytes)")
 
         connected_clients = [client for client in self.clients.values() if client.is_connected]
         
         if not connected_clients:
-            logger.debug("No connected clients to broadcast to")
+            logger.warning("No connected clients to broadcast to")
+            print("[SYSTEM] [WARN] No connected peers to send message to.")
             return
 
-        logger.debug(f"Broadcasting message to {len(connected_clients)} peers")
+        logger.info(f"Broadcasting to {len(connected_clients)} peer(s)")
         
-        tasks = [
-            client.write_gatt_char(CHARACTERISTIC_UUID,
-                                   data_to_send, response=False)
-            for client in connected_clients
-        ]
+        tasks = []
+        client_addresses = []
+        for addr, client in self.clients.items():
+            if client.is_connected:
+                tasks.append(
+                    client.write_gatt_char(CHARACTERISTIC_UUID,
+                                         data_to_send, response=False)
+                )
+                client_addresses.append(addr)
         
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    failed_client_addr = list(self.clients.keys())[i]
+                    failed_client_addr = client_addresses[i]
                     logger.error(f"Failed to send message to {failed_client_addr}: {result}")
                     print(
                         f"[SYSTEM] [ERROR] Failed to send message to {failed_client_addr}: {result}")
+                else:
+                    logger.debug(f"Successfully sent message to {client_addresses[i]}")
 
     async def shutdown(self):
         """Clean shutdown of all BLE services."""

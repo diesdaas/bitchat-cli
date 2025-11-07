@@ -509,16 +509,18 @@ class BLEService:
         )
         
         # Pack the packet without signature to get the data to sign
-        # We need to pack: header + sender_id + recipient_id + payload (everything except signature)
+        # IMPORTANT: We must sign with flags=3 (HAS_RECIPIENT | HAS_SIGNATURE) 
+        # because that's what the final packet will have. The signature must match
+        # the exact data structure that will be in the final packet.
         header_format = f'>BB B Q B H {8}s'  # version, type, ttl, timestamp, flags, payload_len, sender_id
-        flags = 1  # HAS_RECIPIENT (we'll add HAS_SIGNATURE flag later)
+        flags = 3  # HAS_RECIPIENT | HAS_SIGNATURE (must match final packet flags!)
         header = struct.pack(
             header_format, packet.version, packet.type.value, packet.ttl,
             packet.timestamp, flags, len(packet.payload), packet.sender_id
         )
         data_to_sign = header + packet.recipient_id + packet.payload
         
-        # Sign the packet data (without signature field)
+        # Sign the packet data (without signature field, but with correct flags)
         signature = self.encryption_service.sign(data_to_sign)
         
         # Now create the final packet with signature

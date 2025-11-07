@@ -37,6 +37,43 @@ class BLEService:
         self.server = None  # Will be BleakServer instance
         self.server_running = False
 
+    def _parse_announce_packet(self, packet: BitchatPacket):
+        """Parses ANNOUNCE packet payload to extract public keys."""
+        try:
+            payload = packet.payload
+            offset = 0
+            
+            # Type 1: Nickname (8 bytes)
+            if len(payload) >= offset + 2:
+                type1, len1 = payload[offset], payload[offset + 1]
+                offset += 2
+                if type1 == 0x01 and len1 == 0x08 and len(payload) >= offset + 8:
+                    nickname = payload[offset:offset + 8].rstrip(b'\x00').decode('utf-8', errors='ignore')
+                    offset += 8
+                    logger.info(f"ANNOUNCE: Nickname = {nickname}")
+            
+            # Type 2: Ed25519 public signing key (32 bytes)
+            if len(payload) >= offset + 2:
+                type2, len2 = payload[offset], payload[offset + 1]
+                offset += 2
+                if type2 == 0x02 and len2 == 0x20 and len(payload) >= offset + 32:
+                    ed25519_key = payload[offset:offset + 32]
+                    self.encryption_service.add_peer_signing_key(packet.sender_id, ed25519_key)
+                    offset += 32
+                    logger.info(f"ANNOUNCE: Extracted Ed25519 key for {packet.sender_id.hex()[:8]}")
+            
+            # Type 3: X25519 public key (32 bytes)
+            if len(payload) >= offset + 2:
+                type3, len3 = payload[offset], payload[offset + 1]
+                offset += 2
+                if type3 == 0x03 and len3 == 0x20 and len(payload) >= offset + 32:
+                    x25519_key = payload[offset:offset + 32]
+                    self.encryption_service.add_peer_public_key(packet.sender_id, x25519_key)
+                    offset += 32
+                    logger.info(f"ANNOUNCE: Extracted X25519 key for {packet.sender_id.hex()[:8]}")
+        except Exception as e:
+            logger.error(f"Failed to parse ANNOUNCE packet: {e}", exc_info=True)
+
     def notification_handler(self, characteristic: BleakGATTCharacteristic, data: bytearray):
         """Handles incoming data packets from peers when acting as Central."""
         try:
@@ -82,6 +119,11 @@ class BLEService:
                 logger.info(f"Packet unpacked successfully: sender_id={packet.sender_id.hex()[:8]}..., my_id={self.state.my_peer_id.hex()[:8]}...")
                 logger.info(f"Payload length: {len(packet.payload)} bytes")
                 logger.info(f"Payload preview: {packet.payload[:100]}")
+                
+                # Handle ANNOUNCE packets: extract and store public keys
+                if packet.type.value == 0x01:  # ANNOUNCE
+                    self._parse_announce_packet(packet)
+                
                 if packet.sender_id != self.state.my_peer_id:
                     message = BitchatMessage.from_payload(packet.payload)
                     if message:
@@ -495,11 +537,12 @@ class BLEService:
         # Use simple text payload for compatibility
         simple_payload = message.content.encode('utf-8')
         
+        # According to bitchat documentation: "Public local chat has no security concerns"
         # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
-        # We need to match this format exactly. The phone app always includes a signature.
-        # The phone app validates signatures cryptographically, so we need real Ed25519 signatures.
+        # BUT: Let's try sending WITHOUT signature first (flags=1) to see if that works
+        # If that doesn't work, we'll add signatures back
         
-        # Create packet without signature first
+        # Try approach 1: Send with signature (flags=3) - matching phone app exactly
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,

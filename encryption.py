@@ -1,10 +1,13 @@
 # encryption.py
+import logging
 import os
 from typing import Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+logger = logging.getLogger(__name__)
 
 
 class EncryptionService:
@@ -23,6 +26,9 @@ class EncryptionService:
         # Ed25519 key pair for signing messages (64-byte signatures)
         self.signing_key = Ed25519PrivateKey.generate()
         self.signing_public_key = self.signing_key.public_key()
+        
+        # Store peer Ed25519 public keys for signature verification
+        self.peer_signing_keys: dict[bytes, ed25519.Ed25519PublicKey] = {}
 
     def get_public_key_bytes(self) -> bytes:
         """Returns the raw public key for exchange."""
@@ -80,3 +86,26 @@ class EncryptionService:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw
         )
+    
+    def add_peer_signing_key(self, peer_id: bytes, peer_key_bytes: bytes):
+        """Adds a peer's Ed25519 public signing key for signature verification."""
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            peer_signing_key = Ed25519PublicKey.from_public_bytes(peer_key_bytes)
+            self.peer_signing_keys[peer_id] = peer_signing_key
+            logger.info(f"Added Ed25519 signing key for peer {peer_id.hex()[:8]}")
+        except Exception as e:
+            logger.error(f"Failed to add peer signing key: {e}")
+    
+    def verify_signature(self, data: bytes, signature: bytes, peer_id: bytes) -> bool:
+        """Verifies a signature using the peer's public key."""
+        peer_key = self.peer_signing_keys.get(peer_id)
+        if not peer_key:
+            logger.warning(f"No signing key for peer {peer_id.hex()[:8]}, cannot verify")
+            return False
+        try:
+            peer_key.verify(signature, data)
+            return True
+        except Exception as e:
+            logger.warning(f"Signature verification failed: {e}")
+            return False

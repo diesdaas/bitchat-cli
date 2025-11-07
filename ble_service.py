@@ -427,15 +427,16 @@ class BLEService:
         # Use simple text payload for compatibility
         simple_payload = message.content.encode('utf-8')
         
-        # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags
-        # Try without signature first - maybe the phone app doesn't actually validate it
-        # If that doesn't work, we might need to implement proper signature generation
+        # The phone app sends packets with HAS_RECIPIENT | HAS_SIGNATURE flags (flags=3)
+        # We need to match this format exactly. The phone app always includes a signature.
+        # For now, we'll send an empty signature (64 bytes of zeros) to match the structure.
+        # In a full implementation, this would be a cryptographic signature.
         packet = BitchatPacket(
             sender_id=self.state.my_peer_id,
             recipient_id=BROADCAST_RECIPIENT,
             payload=simple_payload,
             type=MessageType.KEY_EXCHANGE,  # Use 0x02 like the phone app
-            signature=None  # Try without signature - phone might not validate it for simple messages
+            signature=b'\x00' * 64  # Empty signature (64 bytes) - matches phone app structure
         )
         data_to_send = packet.pack()
         
